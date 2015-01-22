@@ -271,8 +271,13 @@ def in_process_setup(the_object_server=object_server):
         config, logger=debug_logger('obj1'))
     obj2srv = the_object_server.ObjectController(
         config, logger=debug_logger('obj2'))
+    obj3srv = the_object_server.ObjectController(
+        config, logger=debug_logger('obj3'))
 
     logger = debug_logger('proxy')
+
+    sp_environ = {'paco.object_server': obj3srv,
+                  'paco.bind_port': obj2lis.getsockname()[1]}
 
     def get_logger(name, *args, **kwargs):
         return logger
@@ -283,7 +288,8 @@ def in_process_setup(the_object_server=object_server):
             app = loadapp(proxy_conf, global_conf=config)
 
     nl = utils.NullLogger()
-    prospa = eventlet.spawn(eventlet.wsgi.server, prolis, app, nl)
+    prospa = eventlet.spawn(eventlet.wsgi.server, prolis, app, nl,
+                            environ=sp_environ)
     acc1spa = eventlet.spawn(eventlet.wsgi.server, acc1lis, acc1srv, nl)
     acc2spa = eventlet.spawn(eventlet.wsgi.server, acc2lis, acc2srv, nl)
     con1spa = eventlet.spawn(eventlet.wsgi.server, con1lis, con1srv, nl)

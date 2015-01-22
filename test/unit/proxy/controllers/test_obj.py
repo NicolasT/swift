@@ -113,11 +113,13 @@ class TestObjControllerWriteAffinity(unittest.TestCase):
         self.assertEqual(sorted(all_nodes), sorted(local_first_nodes))
 
     def test_connect_put_node_timeout(self):
+        req = swift.common.swob.Request.blank('/v1/a/c/o', method='PUT')
         controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
         self.app.conn_timeout = 0.05
         with set_http_connect(slow_connect=True):
             nodes = [dict(ip='', port='', device='')]
-            res = controller._connect_put_node(nodes, '', '', {}, ('', ''))
+            res = controller._connect_put_node(nodes, '', '', {}, ('', ''),
+                                               req)
         self.assertTrue(res is None)
 
 
