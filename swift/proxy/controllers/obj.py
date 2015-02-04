@@ -363,72 +363,78 @@ class ObjectController(Controller):
                         _('Trying to write to %s') % path)
             conn.queue.task_done()
 
+    @staticmethod
+    def _is_paco(req, node):
+        return all(['paco.object_server' in req.environ,
+                    node['port'] == int(req.environ.get('paco.bind_port', -1)),
+                    node['ip'] in ['localhost', '127.0.0.1']])
+
+    def _run_paco(self, node, part, path, headers, req):
+        object_server = req.environ['paco.object_server']
+
+        environ = req.environ.copy()
+        environ.update(headers)
+        local_req = Request.blank(
+            path, headers=headers, environ=environ)
+
+        # fix path to include device
+        local_req.environ['PATH_INFO'] = '/' + node['device'] + \
+            '/' + str(part) + path
+
+        conn = LocalConn(node)
+        conn.queue = TransferQueue(self.app.put_queue_depth)
+
+        # hack in so that the object servers reads the data
+        # directly from the queue
+        class Dummy():
+            pass
+
+        reader = Dummy()
+        size = int(local_req.environ['Content-Length'])
+
+        def read(lenth):
+            if conn.bytes_transferred == size:
+                conn.queue.done()
+                return ""
+            x = conn.queue.get()
+            conn.bytes_transferred += len(x)
+            return x
+
+        reader.read = read
+        local_req.environ['wsgi.input'] = reader
+
+        # this is where the response will be looked up
+        # by _get_responses
+        evt = Event()
+
+        def process_request():
+            conn.resp = local_req.get_response(object_server)
+            # make the status be just the code
+            conn.resp.use_status_int = True
+            evt.send()
+
+        def get_response():
+            evt.wait()
+            return conn.resp
+
+        conn.getresponse = get_response
+
+        # spawn work on a separate thread
+        spawn(process_request)
+        return conn
+
     def _connect_put_node(self, nodes, part, path, headers,
                           logger_thread_locals, req):
         """Method for a file PUT connect"""
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
-            try:
+            if self._is_paco(req, node):
                 # bypass if storing locally as we are the object server
-                if 'paco.object_server' in req.environ and \
-                        node['port'] == int(req.environ['paco.bind_port']) \
-                        and node['ip'] in ['localhost', '127.0.0.1']:
-                    object_server = req.environ['paco.object_server']
-
-                    environ = req.environ.copy()
-                    environ.update(headers)
-                    local_req = Request.blank(
-                        path, headers=headers, environ=environ)
-
-                    # fix path to include device
-                    local_req.environ['PATH_INFO'] = '/' + node['device'] + \
-                        '/' + str(part) + path
-
-                    conn = LocalConn(node)
-                    conn.queue = TransferQueue(self.app.put_queue_depth)
-
-                    # hack in so that the object servers reads the data
-                    # directly from the queue
-                    class Dummy():
-                        pass
-
-                    reader = Dummy()
-                    size = int(local_req.environ['Content-Length'])
-
-                    def read(lenth):
-                        if conn.bytes_transferred == size:
-                            conn.queue.done()
-                            return ""
-                        x = conn.queue.get()
-                        conn.bytes_transferred += len(x)
-                        return x
-
-                    reader.read = read
-                    local_req.environ['wsgi.input'] = reader
-
-                    # this is where the response will be looked up
-                    # by _get_responses
-                    evt = Event()
-
-                    def process_request():
-                        conn.resp = local_req.get_response(object_server)
-                        # make the status be just the code
-                        conn.resp.use_status_int = True
-                        evt.send()
-
-                    def get_response():
-                        evt.wait()
-                        return conn.resp
-
-                    conn.getresponse = get_response
-
-                    # spawn work on a separate thread
-                    spawn(process_request)
-                    return conn
-            except Exception as ex:
-                self.app.logger.exception(
-                    "Error in PACO bypass: %s", ex.message)
-                raise ex
+                try:
+                    return self._run_paco(node, part, path, headers, req)
+                except Exception:
+                    self.app.logger.exception("Exception during PACO bypass")
+                    raise
 
             try:
                 start_time = time.time()
