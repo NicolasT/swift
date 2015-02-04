@@ -109,14 +109,34 @@ class TransferQueue():
         pass
 
 
-class LocalConn():
-
-    def __init__(self, node):
+class LocalConn(object):
+    def __init__(self, node, event):
         # this is None so that _send_file is Noop'ed
         self.send = None
         self.node = node
         self.bytes_transferred = 0
         self.resp = None
+
+        self.event = event
+
+    def getresponse(self):
+        self.event.wait()
+        return self.resp
+
+
+class DummyInput(object):
+    def __init__(self, conn, size):
+        self.conn = conn
+        self.size = size
+
+    def read(self, length):
+        if self.conn.bytes_transferred == self.size:
+            self.conn.queue.done()
+            return ""
+
+        data = self.conn.queue.get()
+        self.conn.bytes_transferred += len(data)
+        return data
 
 
 class ObjectController(Controller):
@@ -381,43 +401,23 @@ class ObjectController(Controller):
         local_req.environ['PATH_INFO'] = '/' + node['device'] + \
             '/' + str(part) + path
 
-        conn = LocalConn(node)
+        evt = Event()
+
+        conn = LocalConn(node, evt)
         conn.queue = TransferQueue(self.app.put_queue_depth)
 
-        # hack in so that the object servers reads the data
-        # directly from the queue
-        class Dummy():
-            pass
-
-        reader = Dummy()
         size = int(local_req.environ['Content-Length'])
 
-        def read(lenth):
-            if conn.bytes_transferred == size:
-                conn.queue.done()
-                return ""
-            x = conn.queue.get()
-            conn.bytes_transferred += len(x)
-            return x
-
-        reader.read = read
-        local_req.environ['wsgi.input'] = reader
+        local_req.environ['wsgi.input'] = DummyInput(conn, size)
 
         # this is where the response will be looked up
         # by _get_responses
-        evt = Event()
 
         def process_request():
             conn.resp = local_req.get_response(object_server)
             # make the status be just the code
             conn.resp.use_status_int = True
             evt.send()
-
-        def get_response():
-            evt.wait()
-            return conn.resp
-
-        conn.getresponse = get_response
 
         # spawn work on a separate thread
         spawn(process_request)
