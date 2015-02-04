@@ -369,7 +369,7 @@ class ObjectController(Controller):
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
             try:
-                # bypass if storing locally at we have the object server
+                # bypass if storing locally as we are the object server
                 if 'paco.object_server' in req.environ and \
                         node['port'] == int(req.environ['paco.bind_port']) \
                         and node['ip'] in ['localhost', '127.0.0.1']:
@@ -426,7 +426,8 @@ class ObjectController(Controller):
                     spawn(process_request)
                     return conn
             except Exception as ex:
-                self.app.logger.exception("exception: %s" % ex.message)
+                self.app.logger.exception(
+                    "Error in PACO bypass: %s", ex.message)
                 raise ex
 
             try:
